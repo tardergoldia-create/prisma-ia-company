@@ -22,13 +22,32 @@ REGRAS:
   // Avoid constructing the API client during DI / app bootstrap to prevent runtime errors
   // when API keys are not available in the environment (e.g. Netlify preview builds).
   private getApiKey(): string | undefined {
+    // Try multiple possible env var names and runtime globals to be tolerant across environments
     try {
-      if (typeof process !== 'undefined' && process && process.env && process.env.API_KEY) {
-        return process.env.API_KEY;
+      if (typeof process !== 'undefined' && process && process.env) {
+        if (process.env.API_KEY) return process.env.API_KEY;
+        if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
       }
     } catch (e) {
-      // process may be undefined in some environments
+      // ignore
     }
+
+    try {
+      // Some hosting setups expose runtime envs on globalThis
+      const g: any = (globalThis as any) || {};
+      if (g && g.API_KEY) return g.API_KEY;
+      if (g && g.GEMINI_API_KEY) return g.GEMINI_API_KEY;
+      // Also support a window __env object if used
+      if (typeof (window as any) !== 'undefined' && (window as any).__env) {
+        const env = (window as any).__env;
+        if (env.API_KEY) return env.API_KEY;
+        if (env.GEMINI_API_KEY) return env.GEMINI_API_KEY;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Last resort: check .env.local style var (GEMINI_API_KEY) loaded into process.env during local dev
     return undefined;
   }
 
@@ -42,6 +61,29 @@ REGRAS:
     } catch (e) {
       console.error('Failed to initialize GoogleGenAI:', e);
       return undefined;
+    }
+  }
+
+  // Public helper to send text-only queries to the model (used for voice assistant or direct queries)
+  async askText(prompt: string): Promise<string> {
+    const ai = this.getAi();
+    if (!ai) throw new Error('API_KEY environment variable not set or Google API client unavailable.');
+
+    const textPart = { text: prompt };
+    try {
+      const response: GenerateContentResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: { parts: [textPart] },
+        config: { systemInstruction: this.SYSTEM_PROMPT }
+      });
+
+      const responseText = response.text;
+      // Speak the response if possible
+      try { this.speakSignal(responseText); } catch (e) { /* ignore */ }
+      return responseText;
+    } catch (error) {
+      console.error('Erro Prisma API (text):', error);
+      throw new Error('Falha na análise Prisma.');
     }
   }
 

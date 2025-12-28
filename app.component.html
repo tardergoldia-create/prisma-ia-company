@@ -189,6 +189,16 @@
                     <button (click)="forceScan()" [disabled]="isLoading()" class="w-full text-center py-4 bg-primary text-black font-bold rounded-lg hover:bg-primary-glow disabled:opacity-40 transition-all font-display shadow-glow">
                         {{ isLoading() ? "ANALISANDO..." : "FORÇAR ANÁLISE" }}
                     </button>
+                    <div class="mt-3 flex items-center gap-3">
+                      <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" (change)="toggleVoice()" [checked]="isVoiceEnabled()" class="accent-primary">
+                        <span class="text-xs text-gray-300">Assistente de voz</span>
+                      </label>
+                      <button *ngIf="isVoiceEnabled()" (click)="isListening() ? stopListening() : startListening()" class="ml-auto px-3 py-2 rounded-md bg-white/5 text-sm font-bold border border-white/5">
+                        <span *ngIf="!isListening()" class="material-icons-round">mic</span>
+                        <span *ngIf="isListening()" class="material-icons-round text-red-400">mic_off</span>
+                      </button>
+                    </div>
                     <button (click)="disconnect()" class="w-full text-center py-3 mt-4 bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 transition-all font-display text-xs">
                         DESCONECTAR
                     </button>

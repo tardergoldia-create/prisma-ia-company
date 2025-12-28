@@ -41,6 +41,10 @@ export class AppComponent implements OnDestroy {
   videoElement = viewChild<ElementRef<HTMLVideoElement>>('videoElement');
   canvasElement = viewChild<ElementRef<HTMLCanvasElement>>('canvasElement');
 
+  // Voice assistant state
+  isVoiceEnabled = signal<boolean>(false);
+  isListening = signal<boolean>(false);
+  private recognition: any = null;
   confidenceValue = computed(() => {
     const confidence = this.analysisResult()?.assertividade;
     if (!confidence) return 0;
@@ -52,6 +56,31 @@ export class AppComponent implements OnDestroy {
     this.loadHistoryFromStorage();
     if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('prisma-auth') === 'true') {
       this.isAuthenticated.set(true);
+    }
+
+    // Prepare speech recognition when available
+    try {
+      const SpeechRecognition: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        this.recognition = new SpeechRecognition();
+        this.recognition.lang = 'pt-BR';
+        this.recognition.interimResults = false;
+        this.recognition.maxAlternatives = 1;
+        this.recognition.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript;
+          this.handleRecognitionResult(transcript);
+        };
+        this.recognition.onend = () => {
+          this.isListening.set(false);
+        };
+        this.recognition.onerror = (err: any) => {
+          console.error('Speech recognition error', err);
+          this.isListening.set(false);
+          this.error.set('Erro no reconhecimento de voz.');
+        };
+      }
+    } catch (e) {
+      // not available
     }
   }
 
@@ -72,6 +101,53 @@ export class AppComponent implements OnDestroy {
     }
     this.isAuthenticated.set(false);
     this.disconnect();
+  }
+
+  toggleVoice() {
+    this.isVoiceEnabled.update(v => !v);
+    // Reset listening state if disabling
+    if (!this.isVoiceEnabled()) {
+      this.stopListening();
+    }
+  }
+
+  startListening() {
+    if (!this.recognition) {
+      this.error.set('Reconhecimento de voz não suportado neste navegador.');
+      return;
+    }
+    this.isListening.set(true);
+    try {
+      this.recognition.start();
+    } catch (e) {
+      console.error('Failed start recognition', e);
+      this.isListening.set(false);
+    }
+  }
+
+  stopListening() {
+    if (!this.recognition) return;
+    try { this.recognition.stop(); } catch (e) { /* ignore */ }
+    this.isListening.set(false);
+  }
+
+  async handleRecognitionResult(transcript: string) {
+    // Send recognized text to Gemini as a text query and speak the response
+    if (!transcript) return;
+    try {
+      const responseText = await this.geminiService.askText(transcript);
+      // Optionally parse the response to set analysisResult (best-effort)
+      try {
+        const parsed = this.parsePrismaResponse(responseText);
+        this.analysisResult.set(parsed);
+      } catch (e) {
+        // if parsing fails, just show raw text as an error string
+        this.error.set(responseText);
+      }
+      this.speak(responseText);
+    } catch (e: any) {
+      this.error.set(e.message || 'Falha ao consultar o assistente.');
+    }
   }
 
   setMode(newMode: 'upload' | 'live') {
@@ -160,12 +236,15 @@ export class AppComponent implements OnDestroy {
       const parsedResult = this.parsePrismaResponse(resultText);
       this.analysisResult.set(parsedResult);
 
+      // Announce result with voice and add to history
+      this.speakResult(parsedResult);
+
       if (parsedResult.signal !== 'AGUARDAR' && parsedResult.signal !== 'ERRO') {
         this.addToHistory(parsedResult);
       }
     } catch (e: any) {
       console.error("Erro Prisma Scan:", e);
-      this.error.set("Falha na comunicação neural.");
+      this.error.set(e.message || "Falha na comunicação neural.");
     } finally {
       this.isLoading.set(false);
     }
@@ -230,6 +309,10 @@ export class AppComponent implements OnDestroy {
       const resultText = await this.geminiService.analyzeChart(image);
       const parsedResult = this.parsePrismaResponse(resultText);
       this.analysisResult.set(parsedResult);
+
+      // Announce result with voice
+      this.speakResult(parsedResult);
+
       if (parsedResult.signal === 'COMPRA' || parsedResult.signal === 'VENDA') {
         this.addToHistory(parsedResult);
       }
@@ -256,11 +339,20 @@ export class AppComponent implements OnDestroy {
   }
 
   private speak(text: string) {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'pt-BR';
-    utterance.rate = 1.2;
-    window.speechSynthesis.speak(utterance);
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'pt-BR';
+      utterance.rate = 1.2;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('Speech not available:', e);
+    }
+  }
+
+  private speakResult(parsed: Analysis) {
+    const message = `SINAL: ${parsed.signal}. ATIVO: ${parsed.asset}. MOTIVO: ${parsed.reason}. CONFIANÇA: ${parsed.assertividade}`;
+    this.speak(message);
   }
 
   private loadHistoryFromStorage(): void {
