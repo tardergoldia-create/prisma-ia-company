@@ -8,7 +8,7 @@ declare const process: any;
   providedIn: 'root',
 })
 export class GeminiService {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenAI | null = null;
   
   private readonly SYSTEM_PROMPT = `
 Você é o PRISMA IA, o motor de elite para Opções Binárias.
@@ -19,11 +19,30 @@ REGRAS:
 3. RESPOSTA CURTA (VOZ): "SINAL: [COMPRA/VENDA/AGUARDAR] no [ATIVO]. MOTIVO: [Pavio/Fluxo/Exaustão]. Confiança: [X]%"
 `;
 
-  constructor() {
-    if (typeof process === 'undefined' || !process.env.API_KEY) {
-        console.error("API_KEY environment variable not set.");
+  // Avoid constructing the API client during DI / app bootstrap to prevent runtime errors
+  // when API keys are not available in the environment (e.g. Netlify preview builds).
+  private getApiKey(): string | undefined {
+    try {
+      if (typeof process !== 'undefined' && process && process.env && process.env.API_KEY) {
+        return process.env.API_KEY;
+      }
+    } catch (e) {
+      // process may be undefined in some environments
     }
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    return undefined;
+  }
+
+  private getAi(): GoogleGenAI | undefined {
+    if (this.ai) return this.ai;
+    const apiKey = this.getApiKey();
+    if (!apiKey) return undefined;
+    try {
+      this.ai = new GoogleGenAI({ apiKey });
+      return this.ai;
+    } catch (e) {
+      console.error('Failed to initialize GoogleGenAI:', e);
+      return undefined;
+    }
   }
 
   private speakSignal(text: string) {
@@ -53,7 +72,12 @@ REGRAS:
     const textPart = { text: "Analise agora. Próxima vela: COMPRA ou VENDA?" };
 
     try {
-      const response: GenerateContentResponse = await this.ai.models.generateContent({
+      const ai = this.getAi();
+      if (!ai) {
+        throw new Error('API_KEY environment variable not set or Google API client unavailable.');
+      }
+
+      const response: GenerateContentResponse = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: { parts: [textPart, imagePart] },
         config: {
